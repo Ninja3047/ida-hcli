@@ -98,7 +98,7 @@ jobs:
   binary:
     name: Build Binaries
     runs-on: ${{ matrix.os }}
-    needs: publish
+    # needs: publish
     strategy:
       fail-fast: false
       matrix:
