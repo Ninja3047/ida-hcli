@@ -1,0 +1,76 @@
+name: Dependency Updates
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: deps-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  UV_PYTHON: '3.13'
+  COOLDOWN_DAYS: 7
+
+jobs:
+  update-deps:
+    name: Update All Dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Python with uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+          python-version: "${{ env.UV_PYTHON }}"
+
+      - name: Upgrade Python dependencies
+        run: uv lock --upgrade --exclude-newer "$COOLDOWN_DAYS days"
+
+      - name: Install pinact
+        run: |
+          PINACT_DIR="$RUNNER_TEMP/pinact"
+          mkdir -p "$PINACT_DIR"
+          curl -sL "https://github.com/suzuki-shunsuke/pinact/releases/download/v3.10.1/pinact_linux_amd64.tar.gz" \
+            | tar xz -C "$PINACT_DIR" pinact
+          chmod +x "$PINACT_DIR/pinact"
+          echo "$PINACT_DIR" >> "$GITHUB_PATH"
+          "$PINACT_DIR/pinact" version
+
+      - name: Pin and update GitHub Actions
+        run: pinact run --update --min-age "$COOLDOWN_DAYS"
+        env:
+          PINACT_LOG_LEVEL: info
+
+      - name: Create pull request
+        run: |
+          git diff --quiet && { echo "No dependency changes found."; exit 0; }
+
+          branch="deps/update-${GITHUB_RUN_ID}"
+          title="chore(deps): upgrade dependencies"
+          body="Updates Python dependencies and pinned GitHub Actions."
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git add -A
+          git commit -m "$title"
+          gh auth setup-git
+          git push --force-with-lease origin "$branch"
+
+          gh pr view "$branch" --json url --jq .url ||
+            gh pr create --base "$BASE_BRANCH" --head "$branch" --title "$title" --body "$body"
+        env:
+          BASE_BRANCH: ${{ github.event.repository.default_branch }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
